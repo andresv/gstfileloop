@@ -1,0 +1,8 @@
+[package]
+name = "gstfileloop"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+gstreamer = { version = "0.18", features = ["v1_10"] }
