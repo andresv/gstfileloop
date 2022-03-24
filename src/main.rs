@@ -3,7 +3,7 @@ use gst::prelude::*;
 use gstreamer as gst;
 use std::time::Duration;
 
-//  gst-launch-1.0 -v filesrc location=cam_front_center.mp4 ! qtdemux ! filesink location=out.mp4 sync=true
+//  gst-launch-1.0 -v filesrc location=cam_front_center.mp4 ! qtdemux ! mp4mux ! filesink location=out.mp4 sync=true
 
 const INPUT_FILE: &str = "/Users/andres/Downloads/2022-03-23--08-17-34/cam_front_left.mp4";
 const OUTPUT_FILE: &str = "/Users/andres/Downloads/out.mp4";
