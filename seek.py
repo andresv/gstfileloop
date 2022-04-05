@@ -61,6 +61,9 @@ class bcolors:
 
 class Pipeline:
     def __init__(self, uri):
+        # https://stackoverflow.com/questions/53747278/seamless-video-loop-in-gstreamer
+
+        self.stop_pipeline = False
         self.pipeline = Gst.Pipeline()
 
         self.filesrc = Gst.ElementFactory.make("filesrc", "filesrc")
@@ -71,7 +74,28 @@ class Pipeline:
         self.qtdemux.connect("pad-added", self.on_demux_pad_added)
         self.pipeline.add(self.qtdemux)
 
+        self.queue = Gst.ElementFactory.make("queue", "queue")
+        self.pipeline.add(self.queue)
+
+        parse = Gst.ElementFactory.make("h265parse", "parse")
+        self.pipeline.add(parse)
+        mux = Gst.ElementFactory.make("mp4mux", "mp4mux")
+        srcpad = mux.get_static_pad('src')
+        srcpad.add_probe(Gst.PadProbeType.DATA_DOWNSTREAM, self.probe_cb, None)
+        self.pipeline.add(mux)
+
+        filesink = Gst.ElementFactory.make("filesink", "filesink")
+        filesink.set_property("location", "/Users/andres/Downloads/out.mp4")
+        filesink.set_property("sync", True)
+        filesink.set_property("async", False)
+        self.pipeline.add(filesink)
+
         self.filesrc.link(self.qtdemux)
+        # qtmux is dynamically linked in `on_demux_pad_added`
+        #self.qtdemux.link(queue)
+        self.queue.link(parse)
+        parse.link(mux)
+        mux.link(filesink)
 
         self.bus = self.pipeline.get_bus()
         self.bus.add_signal_watch()
@@ -82,37 +106,21 @@ class Pipeline:
 
     def start(self):
         self.pipeline.set_state(Gst.State.PLAYING)
+        self.pipeline.get_state(Gst.CLOCK_TIME_NONE)
+        self.pipeline.seek(1.0,
+            Gst.Format.TIME,
+            Gst.SeekFlags.SEGMENT,
+            Gst.SeekType.SET, 0,
+            Gst.SeekType.NONE, 0)
 
     def stop(self):
+        self.stop_pipeline = True
         self.pipeline.send_event(Gst.Event.new_eos())
 
     def on_demux_pad_added(self, demux, pad, *user_data):
         print("demux pad added")
-        # Create the rest of the pipeline here and link it
-        parse = Gst.ElementFactory.make("h265parse", "parse")
-        mux = Gst.ElementFactory.make("mp4mux", "mp4mux")
-        srcpad = mux.get_static_pad('src')
-        srcpad.add_probe(Gst.PadProbeType.DATA_DOWNSTREAM, self.probe_cb, None)
-
-        filesink = Gst.ElementFactory.make("filesink", "filesink")
-        filesink.set_property("location", "/Users/andres/Downloads/out.mp4")
-        filesink.set_property("sync", True)
-        filesink.set_property("async", False)
-
-        elements = [parse, mux, filesink]
-        for e in elements:
-            self.pipeline.add(e)
-
-        for e in elements:
-            e.sync_state_with_parent()
-            e.sync_state_with_parent()
-
-        sink_pad = parse.get_static_pad("sink")
+        sink_pad = self.queue.get_static_pad("sink")
         pad.link(sink_pad)
-        #demux.link(parse)
-
-        parse.link(mux)
-        mux.link(filesink)
         return Gst.PadProbeReturn.OK
 
     def probe_cb(self, pad, info, pdata):
@@ -122,14 +130,6 @@ class Pipeline:
             print("probe_cb offset %d offset_end %d dts %s duration %s pts %s" % (b.offset, b.offset_end, b.dts, b.duration, b.pts))
 
         return Gst.PadProbeReturn.OK
-
-    def quit(self):
-        self.filesrc.set_state(Gst.State.NULL)
-        self.loop.quit()
-
-    # def on_eos(self, bus, msg):
-    #     print(f"{bcolors.WARNING}SEEK{bcolors.ENDC}")
-    #     self.filesrc.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH, 0)
 
     def on_error(self, bus, msg):
         (err, debug) = msg.parse_error()
@@ -142,13 +142,20 @@ class Pipeline:
 
         if t == Gst.MessageType.EOS:
             print(f"{bcolors.FAIL}EOS{bcolors.ENDC}")
-            self.filesrc.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH, 0)
-            #self.pipeline.set_state(Gst.State.NULL)
+        elif t == Gst.MessageType.SEGMENT_DONE:
+            print(f"{bcolors.FAIL}SEGMENT_DONE{bcolors.ENDC}")
+            if self.stop_pipeline:
+                self.pipeline.set_state(Gst.State.NULL)
+            else:
+                self.pipeline.seek(1.0,
+                    Gst.Format.TIME,
+                    Gst.SeekFlags.SEGMENT,
+                    Gst.SeekType.SET, 0,
+                    Gst.SeekType.NONE, 0)
         elif t == Gst.MessageType.ERROR:
             self.pipeline.set_state(Gst.State.NULL)
             err, debug = message.parse_error()
             print(f"{bcolors.FAIL}ERROR {err} {debug}{bcolors.ENDC}")
-
 
 Gst.init(None)
 
