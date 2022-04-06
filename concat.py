@@ -64,11 +64,15 @@ class Pipeline:
     def __init__(self, uri):
         self.uri = uri
         self.pipeline = Gst.Pipeline()
+        self.i = 0
+        self.stopping = False
 
-        # prepare 5 inputs for the `concat` element
+        # prepare 2 inputs for the `concat` element
         # if first filesrc is read then concat takes another until all srcs are read
         # this is used to loop the same file multiple times
-        for i in range(5):
+        # notice that later in `probe_demux_event_cb` new inputs are added dynamically to concat
+        # so it loops indefinitely
+        for i in range(1,3):
             filesrc = Gst.ElementFactory.make("filesrc", "filesrc%d" % i)
             filesrc.set_property("location", uri)
             self.pipeline.add(filesrc)
@@ -78,6 +82,7 @@ class Pipeline:
             self.pipeline.add(qtdemux)
 
             filesrc.link(qtdemux)
+            self.i = i
 
         self.concat = Gst.ElementFactory.make("concat", "concat")
         parse = Gst.ElementFactory.make("h265parse", "parse")
@@ -105,14 +110,44 @@ class Pipeline:
         self.pipeline.set_state(Gst.State.PLAYING)
 
     def stop(self):
+        self.stopping = True
         self.pipeline.send_event(Gst.Event.new_eos())
 
     def on_demux_pad_added(self, demux, pad, *user_data):
-        print(f"{bcolors.WARNING}qtdemux{user_data} pad added{bcolors.ENDC}")
+        i = user_data[0]
 
-        sink_pad = self.concat.request_pad_simple("sink_%d" % user_data)
+        print(f"{bcolors.WARNING}qtdemux{i} pad added{bcolors.ENDC}")
+
+        sink_pad = self.concat.request_pad_simple("sink_%d" % i)
+        pad.add_probe(Gst.PadProbeType.EVENT_DOWNSTREAM, self.probe_demux_event_cb, i)
 
         pad.link(sink_pad)
+        return Gst.PadProbeReturn.OK
+
+    def probe_demux_event_cb(self, pad, info, user_data):
+        i = user_data
+        evt = info.get_event().type
+        print(f"{bcolors.WARNING}probe_demux_event_cb{i}: {evt}{bcolors.ENDC}")
+
+        if evt == Gst.EventType.EOS and self.stopping:
+            print(f"{bcolors.WARNING}EOS{i} STOP{bcolors.ENDC}")
+            pass
+        elif evt == Gst.EventType.EOS:
+            self.i += 1
+            print(f"{bcolors.WARNING}EOS{self.i} ADD{bcolors.ENDC}")
+
+            filesrc = Gst.ElementFactory.make("filesrc", "filesrc%d" % self.i)
+            filesrc.set_property("location", self.uri)
+            self.pipeline.add(filesrc)
+
+            qtdemux = Gst.ElementFactory.make("qtdemux", "qtdemux%d" % self.i)
+            qtdemux.connect("pad-added", self.on_demux_pad_added, self.i)
+            self.pipeline.add(qtdemux)
+            filesrc.link(qtdemux)
+
+            filesrc.sync_state_with_parent()
+            qtdemux.sync_state_with_parent()
+
         return Gst.PadProbeReturn.OK
 
     def probe_cb(self, pad, info, pdata):
