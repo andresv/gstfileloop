@@ -1,6 +1,7 @@
 import sys
 import signal
 import time
+import threading
 
 import gi
 gi.require_version('Gst', '1.0')
@@ -135,6 +136,23 @@ class Pipeline:
         elif evt == Gst.EventType.EOS:
             self.i += 1
             print(f"{bcolors.WARNING}EOS{self.i} ADD{bcolors.ENDC}")
+
+            def remove_thread_fn(pipeline):
+                print(f"{bcolors.FAIL}REMOVE{bcolors.ENDC}")
+                oldfilesrc = self.pipeline.get_by_name("filesrc%d" % i)
+                oldqtdemux = self.pipeline.get_by_name("qtdemux%d" % i)
+                pipeline.unlink(oldqtdemux)
+                pipeline.unlink(oldfilesrc)
+
+                oldqtdemux.set_state(Gst.State.NULL)
+                oldfilesrc.set_state(Gst.State.NULL)
+
+                pipeline.remove(oldqtdemux)
+                pipeline.remove(oldfilesrc)
+
+            # elements must be removed from separate thread
+            remove = threading.Thread(target=remove_thread_fn, args=(self.pipeline,))
+            remove.start()
 
             filesrc = Gst.ElementFactory.make("filesrc", "filesrc%d" % self.i)
             filesrc.set_property("location", self.uri)
