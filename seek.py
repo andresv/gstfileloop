@@ -1,7 +1,6 @@
 import sys
 import signal
 import time
-from xml.dom.minidom import Element
 
 import gi
 gi.require_version('Gst', '1.0')

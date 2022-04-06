@@ -65,24 +65,19 @@ class Pipeline:
         self.uri = uri
         self.pipeline = Gst.Pipeline()
 
-        self.filesrc1 = Gst.ElementFactory.make("filesrc", "filesrc1")
-        self.filesrc1.set_property("location", uri)
-        self.pipeline.add(self.filesrc1)
+        # prepare 5 inputs for the `concat` element
+        # if first filesrc is read then concat takes another until all srcs are read
+        # this is used to loop the same file multiple times
+        for i in range(5):
+            filesrc = Gst.ElementFactory.make("filesrc", "filesrc%d" % i)
+            filesrc.set_property("location", uri)
+            self.pipeline.add(filesrc)
 
-        self.filesrc2 = Gst.ElementFactory.make("filesrc", "filesrc2")
-        self.filesrc2.set_property("location", uri)
-        self.pipeline.add(self.filesrc2)
+            qtdemux = Gst.ElementFactory.make("qtdemux", "qtdemux%d" % i)
+            qtdemux.connect("pad-added", self.on_demux_pad_added, i)
+            self.pipeline.add(qtdemux)
 
-        self.qtdemux1 = Gst.ElementFactory.make("qtdemux", "demux1")
-        self.qtdemux1.connect("pad-added", self.on_demux1_pad_added)
-        self.pipeline.add(self.qtdemux1)
-
-        self.qtdemux2 = Gst.ElementFactory.make("qtdemux", "demux2")
-        self.qtdemux2.connect("pad-added", self.on_demux2_pad_added)
-        self.pipeline.add(self.qtdemux2)
-
-        self.filesrc1.link(self.qtdemux1)
-        self.filesrc2.link(self.qtdemux2)
+            filesrc.link(qtdemux)
 
         self.concat = Gst.ElementFactory.make("concat", "concat")
         parse = Gst.ElementFactory.make("h265parse", "parse")
@@ -112,70 +107,12 @@ class Pipeline:
     def stop(self):
         self.pipeline.send_event(Gst.Event.new_eos())
 
-    def on_demux1_pad_added(self, demux, pad, *user_data):
-        print(f"{bcolors.WARNING}demux1 pad added{bcolors.ENDC}")
+    def on_demux_pad_added(self, demux, pad, *user_data):
+        print(f"{bcolors.WARNING}qtdemux{user_data} pad added{bcolors.ENDC}")
 
-        sink_pad = self.concat.request_pad_simple("sink_1")
-        pad.add_probe(Gst.PadProbeType.EVENT_DOWNSTREAM, self.probe_demux1_event_cb, None)
-
-        pad.link(sink_pad)
-        return Gst.PadProbeReturn.OK
-
-    def on_demux2_pad_added(self, demux, pad, *user_data):
-        print(f"{bcolors.WARNING}demux2 pad added{bcolors.ENDC}")
-
-        sink_pad = self.concat.request_pad_simple("sink_2")
-        pad.add_probe(Gst.PadProbeType.EVENT_DOWNSTREAM, self.probe_demux2_event_cb, None)
+        sink_pad = self.concat.request_pad_simple("sink_%d" % user_data)
 
         pad.link(sink_pad)
-        return Gst.PadProbeReturn.OK
-
-    def probe_demux1_event_cb(self, pad, info, pdata):
-        evt = info.get_event().type
-        print(f"{bcolors.WARNING}probe_demux1_event_cb: {evt}{bcolors.ENDC}")
-        if evt == Gst.EventType.EOS:
-            print(f"{bcolors.WARNING}EOS1{bcolors.ENDC}")
-
-        return Gst.PadProbeReturn.OK
-
-    def probe_demux2_event_cb(self, pad, info, pdata):
-        evt = info.get_event().type
-        print(f"{bcolors.WARNING}probe_demux2_event_cb: {evt}{bcolors.ENDC}")
-        if evt == Gst.EventType.EOS:
-            print(f"{bcolors.WARNING}EOS2{bcolors.ENDC}")
-
-            # self.qtdemux2 sees EOS
-            # it should mean that self.filesrc2 has finished reading
-            # experiments showed that stuff from self.filesrc2 is read first
-            # so let's try to create a new `filesrc -> qtdemux` combo
-            # which is going to be connected to `self.concat`
-            # ideally if later `self.qtdemux1` finishes then stuff is read again from here
-            # because `concat` has new input available
-
-            # stuff here does not work yet:
-            #
-            # (<unknown>:31423): GStreamer-WARNING **: 17:29:10.391:
-            # Trying to join task 0x7ff7ac83c5f0 from its thread would deadlock.
-            # You cannot change the state of an element from its streaming
-            # thread. Use g_idle_add() or post a GstMessage on the bus to
-            # schedule the state change from the main thread.
-            self.filesrc2.set_state(Gst.State.NULL)
-            self.qtdemux2.set_state(Gst.State.NULL)
-
-            self.concat.unlink(self.qtdemux2)
-            self.pipeline.remove(self.filesrc2)
-            self.pipeline.remove(self.qtdemux2)
-
-            self.filesrc2 = Gst.ElementFactory.make("filesrc", "filesrc2")
-            self.filesrc2.set_property("location", self.uri)
-            self.pipeline.add(self.filesrc2)
-            self.qtdemux2 = Gst.ElementFactory.make("qtdemux", "demux2")
-            self.qtdemux2.connect("pad-added", self.on_demux2_pad_added)
-
-            self.pipeline.add(self.qtdemux2)
-            self.filesrc2.link(self.qtdemux2)
-            #return Gst.PadProbeReturn.DROP
-
         return Gst.PadProbeReturn.OK
 
     def probe_cb(self, pad, info, pdata):
@@ -189,10 +126,6 @@ class Pipeline:
     def quit(self):
         self.filesrc.set_state(Gst.State.NULL)
         self.loop.quit()
-
-    # def on_eos(self, bus, msg):
-    #     print(f"{bcolors.WARNING}SEEK{bcolors.ENDC}")
-    #     self.filesrc.seek_simple(Gst.Format.TIME, Gst.SeekFlags.FLUSH, 0)
 
     def on_error(self, bus, msg):
         (err, debug) = msg.parse_error()
